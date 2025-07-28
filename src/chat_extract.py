@@ -240,9 +240,36 @@ Examples:
         
         output_path = output_dir / filename
         
-        # Save file
+        # Save file with robust encoding handling
         logger.info(f"Saving conversation to {output_path}")
-        output_path.write_text(markdown_content, encoding='utf-8')
+        try:
+            # Ensure content is properly encoded as UTF-8
+            if isinstance(markdown_content, bytes):
+                markdown_content = markdown_content.decode('utf-8', errors='replace')
+            
+            # Normalize content to ensure valid UTF-8
+            markdown_content = str(markdown_content).encode('utf-8', errors='replace').decode('utf-8')
+            
+            # Write with explicit encoding
+            with open(output_path, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(markdown_content)
+            
+            # Verify file was written correctly
+            with open(output_path, 'r', encoding='utf-8') as f:
+                test_read = f.read(100)  # Read first 100 chars to verify
+                logger.debug(f"File write verification: {len(test_read)} characters read successfully")
+        
+        except Exception as e:
+            logger.error(f"Error saving file: {e}")
+            # Fallback: try with explicit binary write
+            try:
+                content_bytes = markdown_content.encode('utf-8', errors='replace')
+                with open(output_path, 'wb') as f:
+                    f.write(content_bytes)
+                logger.info("File saved using binary write fallback")
+            except Exception as fallback_error:
+                logger.error(f"Fallback save also failed: {fallback_error}")
+                raise
         
         print(f"✅ Successfully extracted conversation!")
         print(f"📁 Saved to: {output_path}")

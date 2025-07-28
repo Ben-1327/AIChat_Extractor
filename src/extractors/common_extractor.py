@@ -369,16 +369,38 @@ class MessageParser:
         return MessageRole.USER if sequence % 2 == 1 else MessageRole.ASSISTANT
     
     def _clean_text(self, text: str) -> str:
-        """Clean and normalize text content"""
+        """Clean and normalize text content with proper encoding handling"""
         if not text:
             return ""
+        
+        # Ensure text is properly decoded string
+        if isinstance(text, bytes):
+            try:
+                text = text.decode('utf-8', errors='replace')
+            except UnicodeDecodeError:
+                text = text.decode('latin-1', errors='replace')
+        
+        # Convert to string if it's not already
+        text = str(text)
+        
+        # Remove HTML entities safely
+        try:
+            from html import unescape
+            text = unescape(text)
+        except Exception:
+            # If HTML unescape fails, continue without it
+            pass
         
         # Remove extra whitespace and normalize
         text = ' '.join(text.split())
         
-        # Remove HTML entities
-        from html import unescape
-        text = unescape(text)
+        # Ensure text contains only valid Unicode characters
+        try:
+            # Encode and decode to catch any encoding issues
+            text = text.encode('utf-8', errors='replace').decode('utf-8')
+        except Exception:
+            # Fallback: remove any problematic characters
+            text = ''.join(char for char in text if ord(char) < 65536)
         
         return text.strip()
     

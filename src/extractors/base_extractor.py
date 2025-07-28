@@ -108,7 +108,7 @@ class BaseExtractor(ABC):
     
     def _read_local_file(self, file_path: str) -> Optional[str]:
         """
-        Read HTML content from local file
+        Read HTML content from local file with robust encoding handling
         
         Args:
             file_path: Path to the HTML file
@@ -116,13 +116,39 @@ class BaseExtractor(ABC):
         Returns:
             HTML content string or None if failed
         """
+        encodings_to_try = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']
+        
+        for encoding in encodings_to_try:
+            try:
+                with open(file_path, 'r', encoding=encoding) as f:
+                    content = f.read()
+                
+                # Verify content is valid
+                if content and len(content.strip()) > 0:
+                    # Normalize to UTF-8
+                    content = content.encode('utf-8', errors='replace').decode('utf-8')
+                    logger.debug(f"Successfully read local file with {encoding} encoding ({len(content)} characters)")
+                    return content
+                    
+            except UnicodeDecodeError:
+                logger.debug(f"Failed to read with {encoding} encoding, trying next...")
+                continue
+            except Exception as e:
+                logger.debug(f"Error reading with {encoding}: {e}")
+                continue
+        
+        # Final fallback: read as binary and force decode
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            logger.debug(f"Successfully read local file ({len(content)} characters)")
+            with open(file_path, 'rb') as f:
+                raw_content = f.read()
+            
+            # Try to detect encoding or force UTF-8
+            content = raw_content.decode('utf-8', errors='replace')
+            logger.warning(f"Used binary fallback to read file ({len(content)} characters)")
             return content
+            
         except Exception as e:
-            logger.error(f"Failed to read local file {file_path}: {e}")
+            logger.error(f"Failed to read local file {file_path} with all methods: {e}")
             return None
     
     def _fetch_html(self, url: str) -> Optional[str]:
@@ -203,8 +229,26 @@ class BaseExtractor(ABC):
                 
                 # Handle different response codes
                 if response.status_code == 200:
-                    logger.debug(f"Successfully fetched HTML ({len(response.text)} characters)")
-                    return response.text
+                    # Ensure proper encoding handling
+                    if response.encoding is None:
+                        response.encoding = 'utf-8'
+                    
+                    # Get text content with proper encoding
+                    try:
+                        content = response.text
+                        # Verify the content is valid UTF-8
+                        content.encode('utf-8')
+                        logger.debug(f"Successfully fetched HTML ({len(content)} characters)")
+                        return content
+                    except UnicodeEncodeError:
+                        # Fallback: use response.content and decode manually
+                        try:
+                            content = response.content.decode('utf-8', errors='replace')
+                            logger.debug(f"Successfully fetched HTML with fallback encoding ({len(content)} characters)")
+                            return content
+                        except Exception as e:
+                            logger.warning(f"Encoding fallback failed: {e}")
+                            return response.text
                     
                 elif response.status_code == 403:
                     logger.warning(f"403 Forbidden with header set {attempt + 1}")
@@ -366,16 +410,38 @@ class BaseExtractor(ABC):
         return None
     
     def _clean_text(self, text: str) -> str:
-        """Clean and normalize text content"""
+        """Clean and normalize text content with proper encoding handling"""
         if not text:
             return ""
+        
+        # Ensure text is properly decoded string
+        if isinstance(text, bytes):
+            try:
+                text = text.decode('utf-8', errors='replace')
+            except UnicodeDecodeError:
+                text = text.decode('latin-1', errors='replace')
+        
+        # Convert to string if it's not already
+        text = str(text)
+        
+        # Remove HTML entities safely
+        try:
+            from html import unescape
+            text = unescape(text)
+        except Exception:
+            # If HTML unescape fails, continue without it
+            pass
         
         # Remove extra whitespace and normalize
         text = ' '.join(text.split())
         
-        # Remove any remaining HTML entities
-        from html import unescape
-        text = unescape(text)
+        # Ensure text contains only valid Unicode characters
+        try:
+            # Encode and decode to catch any encoding issues
+            text = text.encode('utf-8', errors='replace').decode('utf-8')
+        except Exception:
+            # Fallback: remove any problematic characters
+            text = ''.join(char for char in text if ord(char) < 65536)
         
         return text.strip()
     
