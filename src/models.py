@@ -43,6 +43,8 @@ class Conversation:
     url: Optional[str] = None
     extracted_at: Optional[datetime] = None
     metadata: Optional[Dict[str, Any]] = None
+    extraction_method: Optional[str] = None
+    extraction_confidence: Optional[float] = None
     
     def __post_init__(self):
         if isinstance(self.service, str):

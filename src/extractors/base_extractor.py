@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Base Extractor for AI Chat Extractor
-Abstract base class for all service extractors.
+Enhanced Base Extractor for AI Chat Extractor
+Uses unified extraction system with multiple strategies and fallback handling.
 """
 
 from abc import ABC, abstractmethod
@@ -13,16 +13,21 @@ import time
 import random
 
 from models import Conversation, ServiceType
+from extractors.unified_extractor import UnifiedExtractor, ExtractorErrorHandler
+from extractors.common_extractor import ExtractionError
 
 logger = logging.getLogger(__name__)
 
 class BaseExtractor(ABC):
-    """Abstract base class for all service extractors"""
+    """Enhanced base class for all service extractors with unified extraction system"""
     
     def __init__(self, service_type: ServiceType, config: Dict[str, Any]):
         self.service_type = service_type
         self.config = config
         self.session = requests.Session()
+        
+        # Initialize unified extractor
+        self.unified_extractor = UnifiedExtractor(service_type, config)
         
         # Set comprehensive headers to appear more like a real browser
         self.session.headers.update({
@@ -42,7 +47,7 @@ class BaseExtractor(ABC):
     
     def extract_conversation(self, url_or_path: str, from_file: bool = False) -> Optional[Conversation]:
         """
-        Extract conversation from URL or local file
+        Enhanced conversation extraction using unified extraction system
         
         Args:
             url_or_path: The share URL or file path to extract from
@@ -62,24 +67,43 @@ class BaseExtractor(ABC):
                 source_url = url_or_path
             
             if not html_content:
-                logger.error("Failed to get HTML content")
+                error = ExtractionError("Failed to get HTML content", "content_fetch_error", self.service_type.value)
+                logger.error(ExtractorErrorHandler.get_user_friendly_message(error))
                 return None
             
             # Parse HTML
             soup = BeautifulSoup(html_content, 'html.parser')
             
-            # Extract conversation using service-specific logic
-            conversation = self._parse_conversation(soup, source_url)
+            # Use unified extraction system
+            conversation = self.unified_extractor.extract_conversation(soup, source_url)
             
             if conversation:
-                logger.info(f"Successfully extracted {len(conversation.messages)} messages")
+                logger.info(f"Successfully extracted {len(conversation.messages)} messages using {conversation.extraction_method} method")
+                
+                # Log extraction statistics
+                stats = self.unified_extractor.get_extraction_stats()
+                logger.debug(f"Extraction stats: {stats}")
             else:
-                logger.warning("No conversation data found")
+                logger.warning("No conversation data found with any extraction method")
+                
+                # Provide detailed failure information
+                stats = self.unified_extractor.get_extraction_stats()
+                logger.info(f"Extraction failure details: {stats}")
             
             return conversation
             
         except Exception as e:
-            logger.error(f"Error extracting conversation: {e}")
+            # Convert to structured error
+            extraction_error = ExtractorErrorHandler.handle_extraction_error(
+                e, self.service_type.value, url_or_path, "extract_conversation"
+            )
+            
+            logger.error(f"Extraction failed: {extraction_error}")
+            
+            # Log user-friendly error message
+            user_msg = ExtractorErrorHandler.get_user_friendly_message(extraction_error)
+            logger.info(f"User-friendly error: {user_msg}")
+            
             return None
     
     def _read_local_file(self, file_path: str) -> Optional[str]:
@@ -340,21 +364,6 @@ class BaseExtractor(ABC):
             logger.debug(f"Alternative fetch methods failed: {e}")
         
         return None
-    
-    @abstractmethod
-    def _parse_conversation(self, soup: BeautifulSoup, url: str) -> Optional[Conversation]:
-        """
-        Parse conversation from BeautifulSoup object
-        This method must be implemented by each service extractor
-        
-        Args:
-            soup: BeautifulSoup parsed HTML
-            url: Original URL for reference
-            
-        Returns:
-            Conversation object or None if parsing failed
-        """
-        pass
     
     def _clean_text(self, text: str) -> str:
         """Clean and normalize text content"""
