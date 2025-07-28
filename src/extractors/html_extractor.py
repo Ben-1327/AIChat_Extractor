@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 
 from models import ChatMessage, MessageRole, ServiceType
+from extractors.text_normalizer import TextNormalizer
 from extractors.common_extractor import ExtractionStrategy, ExtractionResult
 
 logger = logging.getLogger(__name__)
@@ -167,14 +168,34 @@ class HTMLExtractionStrategy(ExtractionStrategy):
         element_str = str(element).lower()
         ui_indicators = [
             'button', 'nav', 'header', 'footer', 'sidebar', 'menu',
-            'toolbar', 'controls', 'settings', 'preferences'
+            'toolbar', 'controls', 'settings', 'preferences', 'navigation',
+            'chat-list', 'conversation-list', 'chat-history', 'recent-chats',
+            'left-panel', 'side-panel', 'history', 'conversations'
         ]
         
         # Check classes and other attributes
         classes = element.get('class', [])
         class_str = ' '.join(classes).lower()
         
-        return any(indicator in element_str or indicator in class_str 
+        # Check id attribute
+        element_id = element.get('id', '').lower()
+        
+        # Check data attributes
+        data_attrs = ' '.join([f"{k}={v}" for k, v in element.attrs.items() 
+                              if k.startswith('data-')]).lower()
+        
+        # Also check parent elements for sidebar context
+        parent = element.parent
+        parent_classes = []
+        if parent:
+            parent_classes = parent.get('class', [])
+            parent_class_str = ' '.join(parent_classes).lower()
+        else:
+            parent_class_str = ""
+        
+        return any(indicator in element_str or indicator in class_str or 
+                  indicator in element_id or indicator in data_attrs or
+                  indicator in parent_class_str
                   for indicator in ui_indicators)
     
     def _extract_messages_from_container(self, container: Any) -> List[ChatMessage]:
@@ -190,7 +211,7 @@ class HTMLExtractionStrategy(ExtractionStrategy):
         for element in message_elements:
             content = self._clean_text(element.get_text())
             
-            if not content or len(content.strip()) < 5:
+            if not content or not TextNormalizer.is_valid_message_content(content):
                 continue
             
             # Determine role
@@ -344,18 +365,8 @@ class HTMLExtractionStrategy(ExtractionStrategy):
         return True
     
     def _clean_text(self, text: str) -> str:
-        """Clean and normalize text content"""
-        if not text:
-            return ""
-        
-        # Remove extra whitespace and normalize
-        text = ' '.join(text.split())
-        
-        # Remove HTML entities
-        from html import unescape
-        text = unescape(text)
-        
-        return text.strip()
+        """Clean and normalize text content using robust TextNormalizer"""
+        return TextNormalizer.normalize_text(text)
 
 class TextPatternExtractionStrategy(ExtractionStrategy):
     """Strategy for text pattern-based extraction (last resort)"""

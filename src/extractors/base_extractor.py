@@ -15,6 +15,7 @@ import random
 from models import Conversation, ServiceType
 from extractors.unified_extractor import UnifiedExtractor, ExtractorErrorHandler
 from extractors.common_extractor import ExtractionError
+from extractors.text_normalizer import TextNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -410,44 +411,12 @@ class BaseExtractor(ABC):
         return None
     
     def _clean_text(self, text: str) -> str:
-        """Clean and normalize text content with proper encoding handling"""
-        if not text:
-            return ""
-        
-        # Ensure text is properly decoded string
-        if isinstance(text, bytes):
-            try:
-                text = text.decode('utf-8', errors='replace')
-            except UnicodeDecodeError:
-                text = text.decode('latin-1', errors='replace')
-        
-        # Convert to string if it's not already
-        text = str(text)
-        
-        # Remove HTML entities safely
-        try:
-            from html import unescape
-            text = unescape(text)
-        except Exception:
-            # If HTML unescape fails, continue without it
-            pass
-        
-        # Remove extra whitespace and normalize
-        text = ' '.join(text.split())
-        
-        # Ensure text contains only valid Unicode characters
-        try:
-            # Encode and decode to catch any encoding issues
-            text = text.encode('utf-8', errors='replace').decode('utf-8')
-        except Exception:
-            # Fallback: remove any problematic characters
-            text = ''.join(char for char in text if ord(char) < 65536)
-        
-        return text.strip()
+        """Clean and normalize text content using robust TextNormalizer"""
+        return TextNormalizer.normalize_text(text)
     
     def _should_include_message(self, content: str) -> bool:
         """Check if message content should be included"""
-        if not content or not content.strip():
+        if not content or not TextNormalizer.is_valid_message_content(content):
             return False
         
         min_length = self.config.get('extraction', {}).get('min_message_length', 1)

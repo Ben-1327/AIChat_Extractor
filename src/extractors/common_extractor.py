@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 
 from models import ChatMessage, MessageRole, ServiceType
+from extractors.text_normalizer import TextNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +133,8 @@ class JSONExtractor:
                 if not any(keyword in data_str for keyword in ['conversation', 'messages', 'shareLinkId']):
                     continue
                 
-                # Clean up escaped JSON
-                cleaned_data = data_str.replace('\\"', '"').replace('\\\\', '\\')
+                # Clean up escaped JSON using TextNormalizer
+                cleaned_data = TextNormalizer.normalize_json_string(data_str)
                 
                 # Try to find JSON objects in the stream data
                 json_objects = self._find_json_in_stream(cleaned_data)
@@ -292,7 +293,7 @@ class MessageParser:
             
             # Extract content
             content = self._extract_content(msg_data)
-            if not content or len(content.strip()) < 1:
+            if not content or not TextNormalizer.is_valid_message_content(content):
                 continue
             
             # Extract role
@@ -369,40 +370,8 @@ class MessageParser:
         return MessageRole.USER if sequence % 2 == 1 else MessageRole.ASSISTANT
     
     def _clean_text(self, text: str) -> str:
-        """Clean and normalize text content with proper encoding handling"""
-        if not text:
-            return ""
-        
-        # Ensure text is properly decoded string
-        if isinstance(text, bytes):
-            try:
-                text = text.decode('utf-8', errors='replace')
-            except UnicodeDecodeError:
-                text = text.decode('latin-1', errors='replace')
-        
-        # Convert to string if it's not already
-        text = str(text)
-        
-        # Remove HTML entities safely
-        try:
-            from html import unescape
-            text = unescape(text)
-        except Exception:
-            # If HTML unescape fails, continue without it
-            pass
-        
-        # Remove extra whitespace and normalize
-        text = ' '.join(text.split())
-        
-        # Ensure text contains only valid Unicode characters
-        try:
-            # Encode and decode to catch any encoding issues
-            text = text.encode('utf-8', errors='replace').decode('utf-8')
-        except Exception:
-            # Fallback: remove any problematic characters
-            text = ''.join(char for char in text if ord(char) < 65536)
-        
-        return text.strip()
+        """Clean and normalize text content using robust TextNormalizer"""
+        return TextNormalizer.normalize_text(text)
     
     def _deduplicate_messages(self, messages: List[ChatMessage]) -> List[ChatMessage]:
         """Remove duplicate messages based on content and role"""

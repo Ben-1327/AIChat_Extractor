@@ -15,6 +15,7 @@ from datetime import datetime
 from config_manager import ConfigManager
 from extractors.service_detector import ServiceDetector
 from extractors.extractor_factory import ExtractorFactory
+from extractors.text_normalizer import TextNormalizer
 from output_formatter import ObsidianChatFormatter
 from updater import UpdateManager
 
@@ -247,8 +248,8 @@ Examples:
             if isinstance(markdown_content, bytes):
                 markdown_content = markdown_content.decode('utf-8', errors='replace')
             
-            # Normalize content to ensure valid UTF-8
-            markdown_content = str(markdown_content).encode('utf-8', errors='replace').decode('utf-8')
+            # Normalize content using TextNormalizer
+            markdown_content = TextNormalizer.normalize_text(markdown_content)
             
             # Write with explicit encoding
             with open(output_path, 'w', encoding='utf-8', newline='\n') as f:

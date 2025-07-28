@@ -9,6 +9,7 @@ from datetime import datetime
 import logging
 
 from models import Conversation, ChatMessage, MessageRole
+from extractors.text_normalizer import TextNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -199,12 +200,15 @@ class ObsidianChatFormatter:
         if self.styles.get('show_sequence', True) and message.sequence:
             subtext_parts.append(f"#{message.sequence}")
         
+        # Normalize message content
+        normalized_content = TextNormalizer.normalize_text(message.content)
+        
         # Build message line
         if subtext_parts:
             subtext = " | ".join(subtext_parts)
-            lines.append(f"< {sender} | {message.content} | {subtext}")
+            lines.append(f"< {sender} | {normalized_content} | {subtext}")
         else:
-            lines.append(f"< {sender} | {message.content}")
+            lines.append(f"< {sender} | {normalized_content}")
         
         return lines
     
