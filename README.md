@@ -20,8 +20,8 @@ Mac用CLIツールで、Grok/ChatGPT/Gemini/Claudeの共有リンクから会話
 ## インストール
 
 ```bash
-git clone https://github.com/yourusername/ai-chat-extractor.git
-cd ai-chat-extractor
+git clone https://github.com/Ben-1327/AIChat_Extractor.git
+cd AIChat_Extractor
 chmod +x scripts/install.sh
 ./scripts/install.sh
 ```

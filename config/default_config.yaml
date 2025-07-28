@@ -37,5 +37,5 @@ output:
 # Update settings
 update:
   check_on_startup: false
-  github_repo: "yourusername/ai-chat-extractor"
+  github_repo: "Ben-1327/AIChat_Extractor"
   auto_update: false

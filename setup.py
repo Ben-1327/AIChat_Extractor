@@ -14,7 +14,7 @@ setup(
     description="Extract AI chat conversations from shared links and convert to Obsidian Chat View format",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/ai-chat-extractor",
+    url="https://github.com/Ben-1327/AIChat_Extractor",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     classifiers=[
