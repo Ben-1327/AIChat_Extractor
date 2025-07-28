@@ -1,0 +1,41 @@
+# AI Chat Extractor Default Configuration
+
+# Default output directory for conversations
+default_output: "~/Documents/Obsidian/Conversations"
+
+# Chat View styles
+default_styles:
+  header: "h3"
+  max_width: 75
+  show_timestamps: true
+  show_sequence: true
+
+# Color scheme for different services
+colors:
+  user: "blue"
+  Grok: "yellow"
+  ChatGPT: "green"
+  Gemini: "purple"
+  Claude: "orange"
+  assistant: "gray"
+  system: "red"
+
+# Extraction settings
+extraction:
+  remove_duplicates: true
+  min_message_length: 1
+  max_retries: 3
+  timeout: 30
+
+# Output formatting
+output:
+  filename_template: "conversation_{service}_{timestamp}.md"
+  include_metadata: true
+  include_source_url: true
+  add_extraction_log: true
+
+# Update settings
+update:
+  check_on_startup: false
+  github_repo: "yourusername/ai-chat-extractor"
+  auto_update: false
