@@ -126,27 +126,51 @@ echo -e "${YELLOW}Checking PATH configuration...${NC}"
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo -e "${YELLOW}Adding $INSTALL_DIR to PATH...${NC}"
     
-    # Determine shell and add to appropriate config file
-    if [ -n "$ZSH_VERSION" ]; then
+    # Determine shell and config file to use
+    SHELL_CONFIG=""
+    if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "/bin/zsh" ] || [ "$SHELL" = "/usr/bin/zsh" ]; then
         SHELL_CONFIG="$HOME/.zshrc"
-    elif [ -n "$BASH_VERSION" ]; then
-        SHELL_CONFIG="$HOME/.bash_profile"
-        if [ ! -f "$SHELL_CONFIG" ]; then
+    elif [ -n "$BASH_VERSION" ] || [ "$SHELL" = "/bin/bash" ] || [ "$SHELL" = "/usr/bin/bash" ]; then
+        # Try .bash_profile first, then .bashrc
+        if [ -f "$HOME/.bash_profile" ] && [ -w "$HOME/.bash_profile" ]; then
+            SHELL_CONFIG="$HOME/.bash_profile"
+        elif [ -f "$HOME/.bashrc" ] && [ -w "$HOME/.bashrc" ]; then
+            SHELL_CONFIG="$HOME/.bashrc"
+        else
+            # Create .bashrc if neither exists or both are not writable
             SHELL_CONFIG="$HOME/.bashrc"
         fi
     else
         SHELL_CONFIG="$HOME/.profile"
     fi
     
-    # Add PATH export if not already present
-    if ! grep -q "export PATH.*$INSTALL_DIR" "$SHELL_CONFIG" 2>/dev/null; then
-        echo "" >> "$SHELL_CONFIG"
-        echo "# AI Chat Extractor CLI" >> "$SHELL_CONFIG"
-        echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$SHELL_CONFIG"
-        echo -e "${GREEN}✅ Added $INSTALL_DIR to PATH in $SHELL_CONFIG${NC}"
-        echo -e "${YELLOW}⚠️  Please restart your terminal or run: source $SHELL_CONFIG${NC}"
+    # Ensure the config file exists and is writable
+    if [ ! -f "$SHELL_CONFIG" ]; then
+        touch "$SHELL_CONFIG" 2>/dev/null
+    fi
+    
+    # Check if we can write to the config file
+    if [ -w "$SHELL_CONFIG" ]; then
+        # Add PATH export if not already present
+        if ! grep -q "export PATH.*$INSTALL_DIR" "$SHELL_CONFIG" 2>/dev/null; then
+            echo "" >> "$SHELL_CONFIG"
+            echo "# AI Chat Extractor CLI" >> "$SHELL_CONFIG"
+            echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$SHELL_CONFIG"
+            echo -e "${GREEN}✅ Added $INSTALL_DIR to PATH in $SHELL_CONFIG${NC}"
+            echo -e "${YELLOW}⚠️  Please restart your terminal or run: source $SHELL_CONFIG${NC}"
+        else
+            echo -e "${GREEN}✅ $INSTALL_DIR is already in PATH${NC}"
+        fi
     else
-        echo -e "${GREEN}✅ $INSTALL_DIR is already in PATH${NC}"
+        # If we can't write to the file, provide manual instructions
+        echo -e "${RED}⚠️  Cannot write to $SHELL_CONFIG (permission denied)${NC}"
+        echo -e "${YELLOW}Please manually add the following line to your shell configuration file:${NC}"
+        echo -e "${BLUE}export PATH=\"$INSTALL_DIR:\$PATH\"${NC}"
+        echo -e ""
+        echo -e "You can do this by running:"
+        echo -e "${BLUE}echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> $SHELL_CONFIG${NC}"
+        echo -e "or"
+        echo -e "${BLUE}echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' | sudo tee -a $SHELL_CONFIG${NC}"
     fi
 else
     echo -e "${GREEN}✅ $INSTALL_DIR is already in PATH${NC}"
