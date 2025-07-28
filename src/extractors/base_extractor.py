@@ -10,6 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 import logging
 import time
+import random
 
 from models import Conversation, ServiceType
 
@@ -23,14 +24,20 @@ class BaseExtractor(ABC):
         self.config = config
         self.session = requests.Session()
         
-        # Set common headers to appear more like a real browser
+        # Set comprehensive headers to appear more like a real browser
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9,ja;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+            'DNT': '1',
         })
     
     def extract_conversation(self, url: str) -> Optional[Conversation]:
@@ -86,16 +93,48 @@ class BaseExtractor(ABC):
             try:
                 logger.debug(f"Fetching HTML (attempt {attempt + 1}/{max_retries})")
                 
-                response = self.session.get(url, timeout=timeout)
+                # Add some randomization to avoid detection
+                if attempt > 0:
+                    time.sleep(random.uniform(2, 5))
+                
+                # Try to handle different types of URLs
+                response = self.session.get(url, timeout=timeout, allow_redirects=True)
+                
+                # Special handling for 403 errors
+                if response.status_code == 403:
+                    logger.warning(f"403 Forbidden - trying with different headers")
+                    # Try with minimal headers
+                    minimal_headers = {
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                    }
+                    response = self.session.get(url, timeout=timeout, headers=minimal_headers, allow_redirects=True)
+                
                 response.raise_for_status()
                 
                 logger.debug(f"Successfully fetched HTML ({len(response.text)} characters)")
                 return response.text
                 
+            except requests.HTTPError as e:
+                if e.response.status_code == 403:
+                    logger.warning(f"Attempt {attempt + 1} failed with 403 Forbidden. This may be due to:")
+                    logger.warning("1. The shared link requires authentication")
+                    logger.warning("2. The service blocks automated requests")
+                    logger.warning("3. The URL may be expired or invalid")
+                else:
+                    logger.warning(f"Attempt {attempt + 1} failed: {e}")
+                    
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + random.uniform(1, 3)
+                    logger.debug(f"Waiting {wait_time:.1f} seconds before retry...")
+                    time.sleep(wait_time)
+                continue
+                
             except requests.RequestException as e:
                 logger.warning(f"Attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)  # Exponential backoff
+                    wait_time = (2 ** attempt) + random.uniform(1, 3)
+                    logger.debug(f"Waiting {wait_time:.1f} seconds before retry...")
+                    time.sleep(wait_time)
                 continue
         
         logger.error(f"Failed to fetch HTML after {max_retries} attempts")

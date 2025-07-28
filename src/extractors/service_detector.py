@@ -29,6 +29,7 @@ class ServiceDetector:
         ServiceType.GEMINI: [
             r'gemini\.google\.com',
             r'bard\.google\.com',
+            r'g\.co/gemini',
         ],
         ServiceType.CLAUDE: [
             r'claude\.ai',
