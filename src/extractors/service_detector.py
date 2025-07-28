@@ -20,6 +20,7 @@ class ServiceDetector:
         ServiceType.GROK: [
             r'grok\.x\.com',
             r'x\.com/grok',
+            r'grok\.com',
         ],
         ServiceType.CHATGPT: [
             r'chat\.openai\.com',

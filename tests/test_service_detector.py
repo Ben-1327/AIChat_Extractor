@@ -23,6 +23,7 @@ class TestServiceDetector(unittest.TestCase):
         test_urls = [
             "https://grok.x.com/share/abc123",
             "https://x.com/grok/chat/xyz789",
+            "https://grok.com/share/bGVnYWN5_ec075326-11ef-43c6-804e-a66269554e76",
         ]
         
         for url in test_urls:
