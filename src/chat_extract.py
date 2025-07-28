@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 import logging
+from datetime import datetime
 
 from config_manager import ConfigManager
 from extractors.service_detector import ServiceDetector
@@ -122,7 +123,6 @@ Examples:
         # Validate URL or file path
         if args.from_file:
             # Check if file exists
-            from pathlib import Path
             file_path = Path(args.url)
             if not file_path.exists():
                 logger.error(f"File not found: {args.url}")
@@ -232,7 +232,6 @@ Examples:
         # Generate filename
         filename_template = config.get('output', {}).get('filename_template', 
                                                        'conversation_{service}_{timestamp}.md')
-        from datetime import datetime
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = filename_template.format(
             service=service,
