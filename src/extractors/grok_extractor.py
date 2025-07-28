@@ -44,14 +44,27 @@ class GrokExtractor(BaseExtractor):
                         import json
                         import re
                         
-                        # Look for JSON patterns
+                        # Look for JSON patterns including Next.js streaming data
                         json_patterns = [
                             r'window\.__INITIAL_STATE__\s*=\s*({.*?});',
                             r'window\.__NUXT__\s*=\s*({.*?});',
                             r'window\.__APP_STATE__\s*=\s*({.*?});',
                             r'"messages"\s*:\s*\[.*?\]',
                             r'"conversation"\s*:\s*{.*?}',
+                            # Next.js streaming data patterns
+                            r'self\.__next_f\.push\(\[.*?"conversation".*?\]\)',
+                            r'"conversation":\s*{[^}]*"conversationId"[^}]*}',
+                            r'"shareLinkId"[^}]*"conversation"[^}]*}',
                         ]
+                        
+                        # Special handling for Next.js streaming data
+                        if 'self.__next_f.push' in script.string:
+                            logger.debug("Found Next.js streaming data - attempting extraction...")
+                            extracted_messages = self._extract_from_nextjs_stream(script.string)
+                            if extracted_messages:
+                                messages.extend(extracted_messages)
+                                logger.info(f"Extracted {len(extracted_messages)} messages from Next.js stream")
+                                continue
                         
                         for pattern in json_patterns:
                             matches = re.search(pattern, script.string, re.DOTALL)
@@ -310,6 +323,207 @@ class GrokExtractor(BaseExtractor):
                     return result
         
         return None
+    
+    def _extract_from_nextjs_stream(self, script_content: str) -> list:
+        """
+        Extract messages from Next.js streaming data format
+        
+        Args:
+            script_content: JavaScript content containing Next.js stream data
+            
+        Returns:
+            List of ChatMessage objects
+        """
+        messages = []
+        
+        try:
+            import json
+            import re
+            
+            logger.debug("Parsing Next.js streaming data...")
+            
+            # Find all Next.js stream push calls
+            # Pattern: self.__next_f.push([number,"data"])
+            stream_pattern = r'self\.__next_f\.push\(\[(\d+),"([^"]*?)"\]\)'
+            matches = re.finditer(stream_pattern, script_content)
+            
+            for match in matches:
+                stream_id = match.group(1)
+                data_str = match.group(2)
+                
+                # Unescape the JSON string
+                data_str = data_str.replace('\\"', '"').replace('\\\\', '\\')
+                
+                logger.debug(f"Found stream data {stream_id}: {data_str[:200]}...")
+                
+                # Look for conversation data in the stream
+                if 'conversation' in data_str and 'shareLinkId' in data_str:
+                    logger.debug("Found conversation stream data - attempting to parse...")
+                    
+                    # Try to extract JSON from the stream data
+                    # Pattern: "[\"$\",\"$L26\",null,{...}]"
+                    json_pattern = r'\[.*?\{.*?"conversation".*?\}.*?\]'
+                    json_match = re.search(json_pattern, data_str, re.DOTALL)
+                    
+                    if json_match:
+                        try:
+                            # Parse the JSON array
+                            json_data = json.loads(json_match.group(0))
+                            logger.debug(f"Successfully parsed stream JSON: {type(json_data)}")
+                            
+                            # Extract conversation data from the array
+                            # Usually in format: ["$", "component", null, {props}]
+                            if isinstance(json_data, list) and len(json_data) >= 4:
+                                props = json_data[3]  # Props object is typically at index 3
+                                if isinstance(props, dict) and 'conversation' in props:
+                                    conversation_data = props['conversation']
+                                    logger.debug("Found conversation data in props")
+                                    
+                                    # Extract messages from conversation
+                                    extracted_messages = self._extract_messages_from_conversation_data(conversation_data)
+                                    if extracted_messages:
+                                        messages.extend(extracted_messages)
+                                        logger.info(f"Extracted {len(extracted_messages)} messages from Next.js stream")
+                                        
+                        except json.JSONDecodeError as e:
+                            logger.debug(f"Failed to parse stream JSON: {e}")
+                            continue
+                    
+                    # Alternative approach: look for direct conversation object patterns
+                    if not messages:
+                        conv_pattern = r'"conversation"\s*:\s*(\{[^}]*?"messages"[^}]*?\})'
+                        conv_match = re.search(conv_pattern, data_str, re.DOTALL)
+                        if conv_match:
+                            try:
+                                conv_json = json.loads(conv_match.group(1))
+                                extracted_messages = self._extract_messages_from_conversation_data(conv_json)
+                                if extracted_messages:
+                                    messages.extend(extracted_messages)
+                                    logger.info(f"Extracted {len(extracted_messages)} messages from conversation pattern")
+                            except json.JSONDecodeError:
+                                continue
+            
+            return messages
+            
+        except Exception as e:
+            logger.debug(f"Error parsing Next.js stream: {e}")
+            return messages
+    
+    def _extract_messages_from_conversation_data(self, conversation_data: dict) -> list:
+        """
+        Extract messages from conversation data structure
+        
+        Args:
+            conversation_data: Dictionary containing conversation information
+            
+        Returns:
+            List of ChatMessage objects
+        """
+        messages = []
+        
+        try:
+            # Look for messages in various possible locations
+            messages_data = None
+            
+            # Try different paths to find messages
+            possible_paths = [
+                ['messages'],
+                ['turns'],
+                ['entries'],
+                ['conversationHistory'],
+                ['history'],
+                ['data', 'messages'],
+                ['conversation', 'messages']
+            ]
+            
+            for path in possible_paths:
+                current = conversation_data
+                try:
+                    for key in path:
+                        current = current[key]
+                    if isinstance(current, list):
+                        messages_data = current
+                        logger.debug(f"Found messages at path: {' -> '.join(path)}")
+                        break
+                except (KeyError, TypeError):
+                    continue
+            
+            if not messages_data:
+                logger.debug("No messages array found in conversation data")
+                return messages
+            
+            sequence = 1
+            for msg_data in messages_data:
+                if not isinstance(msg_data, dict):
+                    continue
+                
+                # Extract content with various possible keys
+                content = (
+                    msg_data.get('content') or
+                    msg_data.get('text') or
+                    msg_data.get('message') or
+                    msg_data.get('body') or
+                    msg_data.get('prompt') or
+                    ''
+                )
+                
+                # Handle nested content structure
+                if isinstance(content, dict):
+                    content = (
+                        content.get('text') or
+                        content.get('content') or
+                        content.get('message') or
+                        str(content)
+                    )
+                elif isinstance(content, list):
+                    # Join list items or extract text from objects
+                    content_parts = []
+                    for item in content:
+                        if isinstance(item, dict):
+                            content_parts.append(item.get('text') or item.get('content') or str(item))
+                        else:
+                            content_parts.append(str(item))
+                    content = ' '.join(content_parts)
+                
+                content = self._clean_text(str(content))
+                
+                if not self._should_include_message(content):
+                    continue
+                
+                # Extract role
+                role_str = (
+                    msg_data.get('role') or
+                    msg_data.get('sender') or
+                    msg_data.get('author') or
+                    msg_data.get('type') or
+                    msg_data.get('from') or
+                    'user'
+                ).lower()
+                
+                # Map role to MessageRole
+                if role_str in ['user', 'human', 'you']:
+                    role = MessageRole.USER
+                elif role_str in ['assistant', 'grok', 'ai', 'bot', 'model', 'system']:
+                    role = MessageRole.ASSISTANT
+                else:
+                    # Fallback: alternate based on sequence
+                    role = MessageRole.USER if sequence % 2 == 1 else MessageRole.ASSISTANT
+                
+                message = ChatMessage(
+                    role=role,
+                    content=content,
+                    sequence=sequence
+                )
+                
+                messages.append(message)
+                sequence += 1
+                logger.debug(f"Extracted message {sequence-1}: {role.value} - {content[:100]}...")
+            
+            return messages
+            
+        except Exception as e:
+            logger.debug(f"Error extracting from conversation data: {e}")
+            return messages
     
     def _determine_message_role(self, element, content: str) -> MessageRole:
         """
