@@ -36,6 +36,9 @@ class GrokExtractor(BaseExtractor):
             
             # Look for script tags containing conversation data (common in modern SPAs)
             script_tags = soup.find_all('script')
+            conversation_info = None
+            all_text_content = []
+            
             for script in script_tags:
                 if script.string and ('conversation' in script.string.lower() or 'messages' in script.string.lower() or 'chat' in script.string.lower()):
                     logger.debug(f"Found potentially relevant script tag: {script.string[:200]}...")
@@ -43,6 +46,26 @@ class GrokExtractor(BaseExtractor):
                     try:
                         import json
                         import re
+                        
+                        # Special handling for Next.js streaming data
+                        if 'self.__next_f.push' in script.string:
+                            logger.debug("Found Next.js streaming data - attempting extraction...")
+                            
+                            # Extract conversation metadata first
+                            if not conversation_info:
+                                conversation_info = self._extract_conversation_info(script.string)
+                            
+                            # Extract text content from this script
+                            text_content = self._extract_text_content_from_stream(script.string)
+                            if text_content:
+                                all_text_content.extend(text_content)
+                            
+                            # Try the original extraction method as fallback
+                            extracted_messages = self._extract_from_nextjs_stream(script.string)
+                            if extracted_messages:
+                                messages.extend(extracted_messages)
+                                logger.info(f"Extracted {len(extracted_messages)} messages from Next.js stream")
+                                continue
                         
                         # Look for JSON patterns including Next.js streaming data
                         json_patterns = [
@@ -56,15 +79,6 @@ class GrokExtractor(BaseExtractor):
                             r'"conversation":\s*{[^}]*"conversationId"[^}]*}',
                             r'"shareLinkId"[^}]*"conversation"[^}]*}',
                         ]
-                        
-                        # Special handling for Next.js streaming data
-                        if 'self.__next_f.push' in script.string:
-                            logger.debug("Found Next.js streaming data - attempting extraction...")
-                            extracted_messages = self._extract_from_nextjs_stream(script.string)
-                            if extracted_messages:
-                                messages.extend(extracted_messages)
-                                logger.info(f"Extracted {len(extracted_messages)} messages from Next.js stream")
-                                continue
                         
                         for pattern in json_patterns:
                             matches = re.search(pattern, script.string, re.DOTALL)
@@ -94,6 +108,21 @@ class GrokExtractor(BaseExtractor):
                     extracted_at=datetime.now()
                 )
                 return conversation
+            
+            # Try to build conversation from collected text content
+            if all_text_content and conversation_info:
+                logger.debug(f"Attempting to build conversation from {len(all_text_content)} text chunks...")
+                messages = self._build_conversation_from_text(all_text_content, conversation_info)
+                if messages:
+                    title = conversation_info.get('title') or self._extract_title(soup)
+                    conversation = Conversation(
+                        messages=messages,
+                        service=ServiceType.GROK,
+                        title=title,
+                        url=url,
+                        extracted_at=datetime.now()
+                    )
+                    return conversation
             
             # Fallback to HTML parsing
             logger.debug("Falling back to HTML parsing...")
@@ -323,6 +352,205 @@ class GrokExtractor(BaseExtractor):
                     return result
         
         return None
+    
+    def _extract_conversation_info(self, script_content: str) -> dict:
+        """
+        Extract conversation metadata from script content
+        
+        Args:
+            script_content: JavaScript content containing conversation data
+            
+        Returns:
+            Dictionary with conversation metadata
+        """
+        import json
+        import re
+        
+        try:
+            # Look for conversation object with metadata
+            conv_pattern = r'"conversation":\s*(\{[^}]*"conversationId"[^}]*"title"[^}]*\})'
+            match = re.search(conv_pattern, script_content)
+            
+            if match:
+                conv_str = match.group(1)
+                # Clean up escaped quotes
+                cleaned_conv = conv_str.replace('\\"', '"')
+                
+                try:
+                    conv_data = json.loads(cleaned_conv)
+                    logger.debug(f"Extracted conversation info: {conv_data}")
+                    return conv_data
+                except json.JSONDecodeError:
+                    pass
+            
+            # Alternative pattern - look for shareLinkId context
+            share_pattern = r'"shareLinkId":\s*"[^"]+",\s*"conversation":\s*(\{[^}]+\})'
+            match = re.search(share_pattern, script_content)
+            
+            if match:
+                conv_str = match.group(1)
+                cleaned_conv = conv_str.replace('\\"', '"')
+                
+                try:
+                    conv_data = json.loads(cleaned_conv)
+                    logger.debug(f"Extracted conversation info from shareLinkId context: {conv_data}")
+                    return conv_data
+                except json.JSONDecodeError:
+                    pass
+                    
+        except Exception as e:
+            logger.debug(f"Error extracting conversation info: {e}")
+        
+        return {}
+    
+    def _extract_text_content_from_stream(self, script_content: str) -> list:
+        """
+        Extract text content that looks like conversation messages from stream data
+        
+        Args:
+            script_content: JavaScript content containing stream data
+            
+        Returns:
+            List of text content strings
+        """
+        import re
+        
+        text_content = []
+        
+        try:
+            # Look for Next.js stream chunks containing substantial text
+            stream_pattern = r'self\.__next_f\.push\(\[\d+,"([^"]+)"\]\)'
+            matches = re.finditer(stream_pattern, script_content)
+            
+            for match in matches:
+                data_str = match.group(1)
+                
+                # Unescape the string
+                unescaped = data_str.replace('\\"', '"').replace('\\\\', '\\').replace('\\n', '\n')
+                
+                # Look for content that looks like conversation text
+                # Skip technical data and focus on substantial text content
+                if (len(unescaped) > 50 and 
+                    not unescaped.startswith(('{"', '[{', 'window.', 'var ', 'function')) and
+                    not re.match(r'^\w+:', unescaped) and  # Skip simple key:value patterns
+                    ('。' in unescaped or '、' in unescaped or len(unescaped.split()) > 10)):  # Japanese punctuation or long text
+                    
+                    # Clean up the text
+                    clean_text = unescaped.strip()
+                    
+                    # Remove common technical prefixes
+                    if clean_text.startswith(('T40', 'T42', 'T43', 'I[', 'metadata')):
+                        continue
+                    
+                    # Extract meaningful content
+                    if clean_text:
+                        text_content.append(clean_text)
+                        logger.debug(f"Extracted text content: {clean_text[:100]}...")
+            
+        except Exception as e:
+            logger.debug(f"Error extracting text content: {e}")
+        
+        return text_content
+    
+    def _build_conversation_from_text(self, text_chunks: list, conversation_info: dict) -> list:
+        """
+        Build conversation messages from extracted text chunks
+        
+        Args:
+            text_chunks: List of text content strings
+            conversation_info: Conversation metadata
+            
+        Returns:
+            List of ChatMessage objects
+        """
+        messages = []
+        
+        try:
+            # Combine and process text chunks
+            combined_text = '\n\n'.join(text_chunks)
+            
+            # Split into potential messages based on patterns
+            # Look for patterns that indicate message boundaries
+            
+            # Pattern 1: "# 概要" style headers (typically Grok responses)
+            grok_sections = []
+            current_section = ""
+            
+            lines = combined_text.split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                
+                # Check for section headers that indicate new messages
+                if (line.startswith('# ') or 
+                    line.startswith('## ') or
+                    line.startswith('- ユーザーの') or
+                    line.startswith('- 技術的') or
+                    (len(current_section) > 100 and line.startswith('- '))):
+                    
+                    # Save previous section if it's substantial
+                    if current_section.strip() and len(current_section.strip()) > 20:
+                        grok_sections.append(current_section.strip())
+                    
+                    current_section = line
+                else:
+                    if line:
+                        current_section += '\n' + line
+            
+            # Add the last section
+            if current_section.strip() and len(current_section.strip()) > 20:
+                grok_sections.append(current_section.strip())
+            
+            # Create messages from sections
+            sequence = 1
+            
+            # Try to infer user question from conversation context
+            title = conversation_info.get('title', '')
+            if title and title != 'AIチャット共有リンク自動メモ化':
+                # Use title as potential user question
+                user_message = ChatMessage(
+                    role=MessageRole.USER,
+                    content=title,
+                    sequence=sequence,
+                    timestamp=datetime.now()
+                )
+                messages.append(user_message)
+                sequence += 1
+                logger.debug(f"Created user message from title: {title}")
+            
+            # Add Grok responses
+            for section in grok_sections:
+                if len(section) > 20:  # Only include substantial content
+                    grok_message = ChatMessage(
+                        role=MessageRole.ASSISTANT,
+                        content=section,
+                        sequence=sequence,
+                        timestamp=datetime.now()
+                    )
+                    messages.append(grok_message)
+                    sequence += 1
+                    logger.debug(f"Created Grok message: {section[:100]}...")
+            
+            # If we don't have any messages yet, try a simpler approach
+            if not messages and combined_text.strip():
+                # Create a single assistant message with all content
+                content = self._clean_text(combined_text)
+                if content and len(content) > 20:
+                    message = ChatMessage(
+                        role=MessageRole.ASSISTANT,
+                        content=content,
+                        sequence=1,
+                        timestamp=datetime.now()
+                    )
+                    messages.append(message)
+                    logger.debug(f"Created single message from combined text: {content[:100]}...")
+            
+            logger.info(f"Built {len(messages)} messages from text content")
+            return messages
+            
+        except Exception as e:
+            logger.debug(f"Error building conversation from text: {e}")
+            return messages
     
     def _extract_from_nextjs_stream(self, script_content: str) -> list:
         """
