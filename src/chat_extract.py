@@ -57,7 +57,7 @@ Examples:
     
     parser.add_argument(
         "url",
-        help="AI chat share URL to extract from"
+        help="AI chat share URL to extract from (or path to HTML file with --from-file)"
     )
     
     parser.add_argument(
@@ -99,6 +99,12 @@ Examples:
         help="Check for and install updates from GitHub"
     )
     
+    parser.add_argument(
+        "--from-file",
+        action="store_true",
+        help="Extract from a local HTML file instead of fetching from URL"
+    )
+    
     args = parser.parse_args()
     
     # Setup logging
@@ -113,10 +119,23 @@ Examples:
             update_manager.check_and_update()
             return 0
         
-        # Validate URL
-        if not validate_url(args.url):
-            logger.error(f"Invalid URL: {args.url}")
-            return 1
+        # Validate URL or file path
+        if args.from_file:
+            # Check if file exists
+            from pathlib import Path
+            file_path = Path(args.url)
+            if not file_path.exists():
+                logger.error(f"File not found: {args.url}")
+                return 1
+            if not file_path.is_file():
+                logger.error(f"Path is not a file: {args.url}")
+                return 1
+            logger.info(f"Reading from local file: {args.url}")
+        else:
+            # Validate URL
+            if not validate_url(args.url):
+                logger.error(f"Invalid URL: {args.url}")
+                return 1
         
         # Print ToS warning
         print_tos_warning()
@@ -144,11 +163,57 @@ Examples:
         extractor = extractor_factory.create_extractor(service)
         
         # Extract conversation
-        logger.info(f"Extracting conversation from {args.url}...")
-        conversation = extractor.extract_conversation(args.url)
+        if args.from_file:
+            logger.info(f"Extracting conversation from file: {args.url}")
+        else:
+            logger.info(f"Extracting conversation from URL: {args.url}")
+        
+        # Track if we encountered specific errors
+        extraction_error_type = None
+        try:
+            conversation = extractor.extract_conversation(args.url, from_file=args.from_file)
+        except Exception as e:
+            logger.error(f"Extraction failed: {e}")
+            extraction_error_type = "exception"
+            conversation = None
         
         if not conversation or not conversation.messages:
             logger.error("No conversation data extracted")
+            
+            # Provide helpful suggestions based on error type
+            print("\n🔧 Troubleshooting Tips:")
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            
+            # Check for 403 errors in logs (simplified approach)
+            print("📍 Common Issues & Solutions:")
+            print("\n🚫 If you see '403 Forbidden' errors:")
+            print("1. 🔐 The shared link may require login/authentication")
+            print("2. 🔗 Verify the URL works in your browser first")
+            print("3. ⏰ The shared link may have expired")
+            print("4. 🛡️ The service may be blocking automated requests")
+            print("")
+            print("💡 Manual Extraction Methods:")
+            print("📄 Option 1 - Save HTML file:")
+            print("1. Open the URL in your browser")
+            print("2. Right-click → 'Save As' → Save as HTML file")
+            print("3. Run: chat_extract /path/to/file.html --from-file --service [service]")
+            print("")
+            print("📝 Option 2 - Manual copy:")
+            print("1. Open the URL in your browser")
+            print("2. Copy the conversation text manually") 
+            print("3. Convert to Obsidian Chat View format manually")
+            
+            print("\n🔧 Other possible issues:")
+            print("1. 🔗 Check if the URL is correct and complete")
+            print("2. 🌐 Verify your internet connection")
+            print("3. 🔄 Try again in a few minutes")
+            print("4. 📱 Test the URL accessibility in your browser")
+            
+            print("\n🆘 Need Help?")
+            print("• 📖 Documentation: https://github.com/Ben-1327/AIChat_Extractor")
+            print("• 🐛 Report issues: https://github.com/Ben-1327/AIChat_Extractor/issues")
+            print("• 💬 Use --verbose flag for detailed error logs")
+            
             return 1
         
         logger.info(f"Extracted {len(conversation.messages)} messages")
