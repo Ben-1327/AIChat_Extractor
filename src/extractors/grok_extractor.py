@@ -342,66 +342,124 @@ class GrokExtractor(BaseExtractor):
             
             logger.debug("Parsing Next.js streaming data...")
             
-            # Find all Next.js stream push calls
-            # Pattern: self.__next_f.push([number,"data"])
-            stream_pattern = r'self\.__next_f\.push\(\[(\d+),"([^"]*?)"\]\)'
-            matches = re.finditer(stream_pattern, script_content)
+            # Look for conversation data patterns in the script
+            # Pattern 1: Direct conversation object with shareLinkId
+            conv_pattern = r'\\"conversation\\":\s*\{[^}]*\\"conversationId\\"[^}]*\}'
+            conv_matches = re.finditer(conv_pattern, script_content)
             
-            for match in matches:
+            for match in conv_matches:
+                conv_data_str = match.group(0)
+                logger.debug(f"Found conversation pattern: {conv_data_str[:200]}...")
+                
+                # Try to extract and parse the conversation object
+                try:
+                    # Clean up the escaped JSON
+                    cleaned_data = conv_data_str.replace('\\"', '"')
+                    
+                    # Extract just the conversation object
+                    conv_obj_match = re.search(r'"conversation":\s*(\{.*?\})', cleaned_data, re.DOTALL)
+                    if conv_obj_match:
+                        conv_json_str = conv_obj_match.group(1)
+                        
+                        # Handle potential issues with nested structures
+                        try:
+                            conv_data = json.loads(conv_json_str)
+                            logger.debug("Successfully parsed conversation object")
+                            
+                            extracted_messages = self._extract_messages_from_conversation_data(conv_data)
+                            if extracted_messages:
+                                messages.extend(extracted_messages)
+                                logger.info(f"Extracted {len(extracted_messages)} messages from conversation object")
+                                return messages  # Return immediately on success
+                                
+                        except json.JSONDecodeError as e:
+                            logger.debug(f"Failed to parse conversation object: {e}")
+                            continue
+                            
+                except Exception as e:
+                    logger.debug(f"Error processing conversation pattern: {e}")
+                    continue
+            
+            # Pattern 2: Look for stream data containing conversation
+            stream_pattern = r'self\.__next_f\.push\(\[(\d+),"([^"]+(?:\\"[^"]*)*)"?\]\)'
+            stream_matches = re.finditer(stream_pattern, script_content)
+            
+            for match in stream_matches:
                 stream_id = match.group(1)
                 data_str = match.group(2)
                 
-                # Unescape the JSON string
-                data_str = data_str.replace('\\"', '"').replace('\\\\', '\\')
-                
-                logger.debug(f"Found stream data {stream_id}: {data_str[:200]}...")
-                
-                # Look for conversation data in the stream
                 if 'conversation' in data_str and 'shareLinkId' in data_str:
-                    logger.debug("Found conversation stream data - attempting to parse...")
+                    logger.debug(f"Found conversation in stream {stream_id}: {data_str[:200]}...")
                     
-                    # Try to extract JSON from the stream data
-                    # Pattern: "[\"$\",\"$L26\",null,{...}]"
-                    json_pattern = r'\[.*?\{.*?"conversation".*?\}.*?\]'
-                    json_match = re.search(json_pattern, data_str, re.DOTALL)
+                    # Extract conversation data more directly
+                    # Look for the shareLinkId and conversation pattern
+                    share_conv_pattern = r'\\"shareLinkId\\":\\"[^"]+\\",\\"conversation\\":\{[^}]+\}'
+                    share_match = re.search(share_conv_pattern, data_str)
                     
-                    if json_match:
-                        try:
-                            # Parse the JSON array
-                            json_data = json.loads(json_match.group(0))
-                            logger.debug(f"Successfully parsed stream JSON: {type(json_data)}")
-                            
-                            # Extract conversation data from the array
-                            # Usually in format: ["$", "component", null, {props}]
-                            if isinstance(json_data, list) and len(json_data) >= 4:
-                                props = json_data[3]  # Props object is typically at index 3
-                                if isinstance(props, dict) and 'conversation' in props:
-                                    conversation_data = props['conversation']
-                                    logger.debug("Found conversation data in props")
-                                    
-                                    # Extract messages from conversation
-                                    extracted_messages = self._extract_messages_from_conversation_data(conversation_data)
-                                    if extracted_messages:
-                                        messages.extend(extracted_messages)
-                                        logger.info(f"Extracted {len(extracted_messages)} messages from Next.js stream")
-                                        
-                        except json.JSONDecodeError as e:
-                            logger.debug(f"Failed to parse stream JSON: {e}")
-                            continue
-                    
-                    # Alternative approach: look for direct conversation object patterns
-                    if not messages:
-                        conv_pattern = r'"conversation"\s*:\s*(\{[^}]*?"messages"[^}]*?\})'
-                        conv_match = re.search(conv_pattern, data_str, re.DOTALL)
+                    if share_match:
+                        share_data_str = share_match.group(0)
+                        logger.debug(f"Found shareLinkId conversation data: {share_data_str[:200]}...")
+                        
+                        # Clean and extract conversation
+                        cleaned = share_data_str.replace('\\"', '"')
+                        conv_match = re.search(r'"conversation":(\{[^}]+\})', cleaned)
+                        
                         if conv_match:
                             try:
-                                conv_json = json.loads(conv_match.group(1))
-                                extracted_messages = self._extract_messages_from_conversation_data(conv_json)
+                                conv_data = json.loads(conv_match.group(1))
+                                logger.debug("Successfully parsed stream conversation object")
+                                
+                                extracted_messages = self._extract_messages_from_conversation_data(conv_data)
                                 if extracted_messages:
                                     messages.extend(extracted_messages)
-                                    logger.info(f"Extracted {len(extracted_messages)} messages from conversation pattern")
-                            except json.JSONDecodeError:
+                                    logger.info(f"Extracted {len(extracted_messages)} messages from stream conversation")
+                                    return messages  # Return immediately on success
+                                    
+                            except json.JSONDecodeError as e:
+                                logger.debug(f"Failed to parse stream conversation: {e}")
                                 continue
+            
+            # Pattern 3: Look for any large JSON structure containing conversation
+            if not messages:
+                logger.debug("Trying broader conversation search...")
+                
+                # Look for any occurrence of conversationId and try to extract surrounding context
+                conv_id_pattern = r'\\"conversationId\\":\\"[^"]+\\"[^}]*\\"messages\\":\[[^\]]*\]'
+                conv_id_matches = re.finditer(conv_id_pattern, script_content)
+                
+                for match in conv_id_matches:
+                    context_str = match.group(0)
+                    logger.debug(f"Found conversationId with messages: {context_str[:200]}...")
+                    
+                    # Try to extract messages array
+                    msg_pattern = r'\\"messages\\":\[([^\]]*)\]'
+                    msg_match = re.search(msg_pattern, context_str)
+                    
+                    if msg_match:
+                        msg_array_str = msg_match.group(1)
+                        logger.debug(f"Found messages array: {msg_array_str[:200]}...")
+                        
+                        # Try to parse messages
+                        try:
+                            # Clean up the string and try to parse
+                            cleaned_msgs = msg_array_str.replace('\\"', '"')
+                            
+                            # Wrap in array brackets if needed
+                            if not cleaned_msgs.startswith('['):
+                                cleaned_msgs = '[' + cleaned_msgs + ']'
+                            
+                            messages_data = json.loads(cleaned_msgs)
+                            
+                            if isinstance(messages_data, list):
+                                extracted_messages = self._extract_messages_from_raw_data(messages_data)
+                                if extracted_messages:
+                                    messages.extend(extracted_messages)
+                                    logger.info(f"Extracted {len(extracted_messages)} messages from raw messages array")
+                                    return messages
+                                    
+                        except json.JSONDecodeError as e:
+                            logger.debug(f"Failed to parse messages array: {e}")
+                            continue
             
             return messages
             
@@ -523,6 +581,84 @@ class GrokExtractor(BaseExtractor):
             
         except Exception as e:
             logger.debug(f"Error extracting from conversation data: {e}")
+            return messages
+    
+    def _extract_messages_from_raw_data(self, messages_data: list) -> list:
+        """
+        Extract messages from raw message array data
+        
+        Args:
+            messages_data: List of raw message data
+            
+        Returns:
+            List of ChatMessage objects
+        """
+        messages = []
+        
+        try:
+            sequence = 1
+            for item in messages_data:
+                if not isinstance(item, dict):
+                    # Skip non-dict items
+                    continue
+                
+                # Extract content with various possible keys
+                content = (
+                    item.get('content') or
+                    item.get('text') or
+                    item.get('message') or
+                    item.get('body') or
+                    item.get('prompt') or
+                    ''
+                )
+                
+                # Handle nested content structure
+                if isinstance(content, dict):
+                    content = (
+                        content.get('text') or
+                        content.get('content') or
+                        str(content)
+                    )
+                elif isinstance(content, list):
+                    content = ' '.join(str(c) for c in content)
+                
+                content = self._clean_text(str(content))
+                
+                if not self._should_include_message(content):
+                    continue
+                
+                # Extract role
+                role_str = (
+                    item.get('role') or
+                    item.get('sender') or
+                    item.get('author') or
+                    item.get('type') or
+                    'user'
+                ).lower()
+                
+                # Map role to MessageRole
+                if role_str in ['user', 'human', 'you']:
+                    role = MessageRole.USER
+                elif role_str in ['assistant', 'grok', 'ai', 'bot', 'model', 'system']:
+                    role = MessageRole.ASSISTANT
+                else:
+                    # Fallback: alternate based on sequence
+                    role = MessageRole.USER if sequence % 2 == 1 else MessageRole.ASSISTANT
+                
+                message = ChatMessage(
+                    role=role,
+                    content=content,
+                    sequence=sequence
+                )
+                
+                messages.append(message)
+                sequence += 1
+                logger.debug(f"Extracted raw message {sequence-1}: {role.value} - {content[:100]}...")
+            
+            return messages
+            
+        except Exception as e:
+            logger.debug(f"Error extracting from raw data: {e}")
             return messages
     
     def _determine_message_role(self, element, content: str) -> MessageRole:
