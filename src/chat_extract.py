@@ -191,6 +191,7 @@ Examples:
             print("2. 🔗 Verify the URL works in your browser first")
             print("3. ⏰ The shared link may have expired")
             print("4. 🛡️ The service may be blocking automated requests")
+            print("5. ☁️ Cloudflare protection may be blocking the request")
             print("")
             print("💡 Manual Extraction Methods:")
             print("📄 Option 1 - Save HTML file:")

@@ -184,6 +184,14 @@ class BaseExtractor(ABC):
                     
                 elif response.status_code == 403:
                     logger.warning(f"403 Forbidden with header set {attempt + 1}")
+                    
+                    # Check if this is a Cloudflare challenge
+                    if 'cf-mitigated' in response.headers or 'cloudflare' in response.headers.get('server', '').lower():
+                        logger.info("Detected Cloudflare protection - attempting bypass...")
+                        cloudflare_result = self._try_cloudflare_bypass(url, timeout)
+                        if cloudflare_result:
+                            return cloudflare_result
+                    
                     # Try alternative approach for 403
                     if attempt == max_retries - 1:
                         # Last attempt - try with completely different approach
@@ -227,6 +235,59 @@ class BaseExtractor(ABC):
         logger.error(f"Failed to fetch HTML after {max_retries} attempts")
         return None
     
+    def _try_cloudflare_bypass(self, url: str, timeout: int) -> Optional[str]:
+        """
+        Try to bypass Cloudflare protection using cloudscraper
+        
+        Args:
+            url: URL to fetch
+            timeout: Request timeout
+            
+        Returns:
+            HTML content or None if failed
+        """
+        try:
+            import cloudscraper
+            logger.info("Attempting Cloudflare bypass with cloudscraper...")
+            
+            # Create cloudscraper session
+            scraper = cloudscraper.create_scraper(
+                browser={
+                    'browser': 'chrome',
+                    'platform': 'darwin',  # macOS
+                    'desktop': True
+                }
+            )
+            
+            # Set additional headers to appear more browser-like
+            scraper.headers.update({
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Language': 'en-US,en;q=0.9,ja;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Upgrade-Insecure-Requests': '1',
+                'Cache-Control': 'max-age=0',
+            })
+            
+            response = scraper.get(url, timeout=timeout)
+            
+            if response.status_code == 200:
+                logger.info(f"Successfully bypassed Cloudflare protection ({len(response.text)} characters)")
+                return response.text
+            else:
+                logger.warning(f"Cloudscraper failed with status code: {response.status_code}")
+                return None
+                
+        except ImportError:
+            logger.debug("cloudscraper not available - install with: pip install cloudscraper")
+            return None
+        except Exception as e:
+            logger.warning(f"Cloudscraper failed: {e}")
+            return None
+    
     def _try_alternative_fetch(self, url: str, timeout: int) -> Optional[str]:
         """
         Try alternative methods to fetch content when standard methods fail
@@ -241,7 +302,12 @@ class BaseExtractor(ABC):
         logger.info("Attempting alternative fetch methods...")
         
         try:
-            # Method 1: Try with requests-html (if available)
+            # Method 1: Try cloudscraper (most effective for Cloudflare)
+            cloudflare_result = self._try_cloudflare_bypass(url, timeout)
+            if cloudflare_result:
+                return cloudflare_result
+            
+            # Method 2: Try with requests-html (if available)
             try:
                 import requests_html
                 logger.debug("Trying with requests-html...")
@@ -256,7 +322,7 @@ class BaseExtractor(ABC):
             except Exception as e:
                 logger.debug(f"requests-html failed: {e}")
             
-            # Method 2: Try with different session configuration
+            # Method 3: Try with different session configuration
             logger.debug("Trying with alternative session configuration...")
             alt_session = requests.Session()
             alt_session.headers.clear()

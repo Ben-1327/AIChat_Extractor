@@ -26,6 +26,11 @@ chmod +x scripts/install.sh
 ./scripts/install.sh
 ```
 
+### 依存関係
+- Python 3.10+
+- requests, beautifulsoup4, PyYAML
+- cloudscraper (Cloudflare対策用)
+
 ## 使用方法
 
 ```bash
